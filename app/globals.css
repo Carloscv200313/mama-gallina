@@ -1,26 +1,46 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f6f1e7;
+  --foreground: #31452f;
+  --brand-forest: #31452f;
+  --brand-olive: #66785a;
+  --brand-sage: #a7b49a;
+  --brand-cream: #f6f1e7;
+  --brand-brown: #8b6846;
+  --brand-gold: #c8a96b;
+  --alert: #c94b4b;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-brand-forest: var(--brand-forest);
+  --color-brand-olive: var(--brand-olive);
+  --color-brand-sage: var(--brand-sage);
+  --color-brand-cream: var(--brand-cream);
+  --color-brand-brown: var(--brand-brown);
+  --color-brand-gold: var(--brand-gold);
+  --color-alert: var(--alert);
+  --font-sans: "Inter", "Segoe UI", sans-serif;
+  --font-display: Georgia, "Times New Roman", serif;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: "Inter", "Segoe UI", sans-serif;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background: var(--brand-sage);
+  color: var(--brand-forest);
 }
