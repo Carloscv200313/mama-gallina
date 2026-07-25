@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "staff:hash-pin": "node scripts/hash-pin.mjs"
+    "staff:hash-pin": "node scripts/hash-pin.mjs",
+    "cleanup:test": "node scripts/cleanup-test-data.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",
