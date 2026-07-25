@@ -41,6 +41,7 @@ export type Database = {
         order_code: string;
         order_type: string;
         table_id: string | null;
+        parent_order_id: string | null;
         waiter_id: string;
         people_count: number | null;
         customer_name: string | null;

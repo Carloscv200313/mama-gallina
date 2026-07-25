@@ -8,14 +8,23 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { orderStatusClass } from "@/lib/pos/types";
+import { createBrowserClient } from "@/lib/supabase/browser";
 
 type KitchenItem = { id: string; orderId: string; orderCode: string; tableLabel: string; openedAt: string; elapsedMinutes: number; productName: string; variantName: string | null; modifierLabels: string[]; quantity: number; notes: string | null; priority: string; status: string };
 
-export function KitchenBoard({ items }: { items: KitchenItem[] }) {
-  const router = useRouter(); const [currentItems, setCurrentItems] = useState(items); const [pending, startTransition] = useTransition(); const [error, setError] = useState("");
-  useEffect(() => { const timer = window.setInterval(() => router.refresh(), 15000); return () => window.clearInterval(timer); }, [router]);
+export function KitchenBoard({ items, branchId }: { items: KitchenItem[]; branchId: string }) {
+  const router = useRouter(); const [optimisticStatuses, setOptimisticStatuses] = useState<Record<string, string>>({}); const [pending, startTransition] = useTransition(); const [error, setError] = useState("");
+  const currentItems = items.map((item) => optimisticStatuses[item.id] ? { ...item, status: optimisticStatuses[item.id] } : item);
+  useEffect(() => {
+    const supabase = createBrowserClient();
+    const channel = supabase.channel(`kitchen:${branchId}`);
+    channel.on("broadcast", { event: "kitchen:update" }, () => router.refresh());
+    channel.subscribe();
+    const timer = window.setInterval(() => router.refresh(), 30000);
+    return () => { window.clearInterval(timer); void supabase.removeChannel(channel); };
+  }, [branchId, router]);
   const columns = [{ key: "pending", label: "Pendientes" }, { key: "preparing", label: "En preparación" }, { key: "ready", label: "Listos" }];
-  function move(item: KitchenItem, next: "preparing" | "ready" | "delivered") { setError(""); startTransition(async () => { const result = await updateKitchenItem(item.id, next); if (!result.ok) { setError(result.error ?? "No se pudo actualizar."); return; } setCurrentItems((current) => current.map((value) => value.id === item.id ? { ...value, status: next } : value)); }); }
+  function move(item: KitchenItem, next: "preparing" | "ready" | "delivered") { setError(""); startTransition(async () => { const result = await updateKitchenItem(item.id, next); if (!result.ok) { setError(result.error ?? "No se pudo actualizar."); return; } setOptimisticStatuses((current) => ({ ...current, [item.id]: next })); }); }
   return <>{error ? <div className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}<div className="grid gap-5 lg:grid-cols-3">{columns.map((column) => { const columnItems = currentItems.filter((item) => item.status === column.key); return <section key={column.key} className="space-y-3"><div className="flex items-center justify-between"><h2 className="font-display text-xl font-bold">{column.label}</h2><Badge variant="muted">{columnItems.length}</Badge></div>{columnItems.length === 0 ? <Card><CardContent className="py-10 text-center text-sm text-brand-olive">Sin productos</CardContent></Card> : columnItems.map((item) => <KitchenTicket key={item.id} item={item} pending={pending} onMove={move} />)}</section>; })}</div></>;
 }
 

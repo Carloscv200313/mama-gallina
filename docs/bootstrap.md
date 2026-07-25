@@ -18,7 +18,10 @@ En Supabase SQL Editor ejecuta, en este orden:
 4. `supabase/migrations/202607240004_spice_preferences.sql`
 5. `supabase/migrations/202607240005_plain_broths_and_combined.sql`
 6. `supabase/migrations/202607240006_combined_broth_price.sql`
-7. `supabase/seed.sql`
+7. `supabase/migrations/202607240007_order_additional_rounds.sql`
+8. `supabase/migrations/202607240008_remove_payment_operation_number.sql`
+9. `supabase/migrations/202607240009_add_yape_payment_method.sql`
+10. `supabase/seed.sql`
 
 La segunda migración cambia las referencias operativas para que apunten a `staff_members`, no a usuarios de correo.
 
@@ -81,12 +84,13 @@ El secreto nunca viaja al navegador.
 ## 7. Operación diaria
 
 1. Entra a `/mesas` y abre una mesa o un pedido para llevar.
-2. Agrega productos y modificadores desde la carta; guarda el pedido y envíalo a `/cocina`.
-3. Cocina avanza cada producto hasta **Listo** y luego **Entregado**.
-4. Atención pasa el pedido a cobro; en `/caja` registra efectivo, Plin o transferencia.
-5. Para pagos digitales, toma la foto desde el celular: se carga a Cloudinary, queda pendiente de verificación y un cajero o administrador la aprueba.
-6. Cuando el saldo sea cero y los pagos digitales estén verificados, cierra la venta. La mesa se libera y el movimiento de efectivo queda registrado.
-7. `/gastos`, `/ventas`, `/reportes` y `/auditoria` muestran la operación persistida del local.
+2. Agrega productos y modificadores desde la carta; al confirmar, la tanda se envía directamente a `/cocina`.
+3. Si la mesa solicita más productos, pulsa **Agregar pedido**. Se crea una nueva tanda con código propio y queda en la cola de cocina sin modificar la anterior.
+4. Cocina avanza cada producto hasta **Listo** y luego **Entregado**.
+5. Atención pasa la cuenta a cobro; en `/caja` registra efectivo, Plin o transferencia. El total incluye todas las tandas de la mesa.
+6. Para pagos digitales, toma la foto desde el celular: se carga a Cloudinary, queda pendiente de verificación y un cajero o administrador la aprueba.
+7. Cuando el saldo sea cero y los pagos digitales estén verificados, cierra la venta. La mesa se libera y el movimiento de efectivo queda registrado.
+8. `/gastos`, `/ventas`, `/reportes` y `/auditoria` muestran la operación persistida del local.
 
 ## 8. Verificación
 

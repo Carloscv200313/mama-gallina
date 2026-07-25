@@ -29,10 +29,29 @@ const updateOrderSchema = z.object({
   reason: z.string().trim().max(300),
   items: z.array(orderItemSchema).min(1).max(100),
 });
+const additionalOrderSchema = z.object({
+  parentOrderId: z.uuid(),
+  notes: z.string().trim().max(500),
+  idempotencyKey: z.uuid(),
+  items: z.array(orderItemSchema).min(1).max(100),
+});
 
 type DbRow = Record<string, unknown>;
 const asRows = <T extends DbRow>(value: unknown[] | null) => (value ?? []) as T[];
 const PLAIN_BROTH_NAMES = new Set(["caldo de cordero", "caldo de mote", "caldo combinado"]);
+
+async function publishKitchenUpdate(admin: ReturnType<typeof createAdminClient>, branchId: string, reason: string) {
+  try {
+    const channel = admin.channel(`kitchen:${branchId}`);
+    const subscribed = await Promise.race([new Promise<boolean>((resolve) => {
+      channel.subscribe((status) => resolve(status === "SUBSCRIBED"));
+    }), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2000))]);
+    if (subscribed) await channel.send({ type: "broadcast", event: "kitchen:update", payload: { reason, at: new Date().toISOString() } });
+    await admin.removeChannel(channel);
+  } catch {
+    // Realtime no debe bloquear el guardado del pedido.
+  }
+}
 
 function isPlainBrothName(name: string) {
   return PLAIN_BROTH_NAMES.has(name.trim().toLocaleLowerCase());
@@ -42,6 +61,50 @@ type OrderItemInput = z.infer<typeof orderItemSchema>;
 type PreparedOrderItems =
   | { ok: true; itemRows: Array<Record<string, unknown>>; modifierRows: Array<Record<string, unknown>>; subtotal: number }
   | { ok: false; error: string };
+
+async function refreshOrderSessionTotals(admin: ReturnType<typeof createAdminClient>, branchId: string, rootOrderId: string, staffId: string, forcedStatus?: string) {
+  const [{ data: rootOrder }, { data: childOrders }] = await Promise.all([
+    admin.from("orders").select("id, status, discount_total").eq("id", rootOrderId).eq("branch_id", branchId).maybeSingle(),
+    admin.from("orders").select("id, status").eq("parent_order_id", rootOrderId).eq("branch_id", branchId),
+  ]);
+  if (!rootOrder) return;
+  const orderIds = [rootOrder.id, ...(childOrders ?? []).map((order) => String(order.id))];
+  const [{ data: itemData }, { data: paymentData }] = await Promise.all([
+    admin.from("order_items").select("line_total, status").in("order_id", orderIds),
+    admin.from("payments").select("amount, status").eq("order_id", rootOrderId),
+  ]);
+  const subtotal = ((itemData ?? []) as Array<{ line_total: number; status: string }>)
+    .filter((item) => item.status !== "cancelled")
+    .reduce((sum, item) => sum + Number(item.line_total), 0);
+  const discount = Number(rootOrder.discount_total ?? 0);
+  const total = Math.max(subtotal - discount, 0);
+  const paymentTotal = ((paymentData ?? []) as Array<{ amount: number; status: string }>)
+    .filter((payment) => !["rejected", "refunded"].includes(payment.status))
+    .reduce((sum, payment) => sum + Number(payment.amount), 0);
+  const activeStatuses = new Set(["draft", "confirmed", "sent_to_kitchen", "preparing", "partially_ready", "ready", "delivered"]);
+  const shouldRecalculateStatus = !["payment_pending", "paid", "cancelled"].includes(rootOrder.status);
+  let nextStatus = forcedStatus ?? rootOrder.status;
+  if (!forcedStatus && shouldRecalculateStatus) {
+    const statuses = ((itemData ?? []) as Array<{ line_total: number; status: string }>)
+      .map((item) => item.status)
+      .filter((status) => status !== "cancelled");
+    if (statuses.length > 0) {
+      nextStatus = statuses.every((status) => status === "delivered")
+        ? "delivered"
+        : statuses.every((status) => status === "ready" || status === "delivered")
+          ? "ready"
+          : statuses.some((status) => status === "ready" || status === "delivered")
+            ? "partially_ready"
+            : statuses.some((status) => status === "preparing")
+              ? "preparing"
+              : "sent_to_kitchen";
+    }
+  }
+  if (!activeStatuses.has(nextStatus) && !["payment_pending", "paid", "cancelled"].includes(nextStatus)) nextStatus = "sent_to_kitchen";
+  const changedStatus = rootOrder.status !== nextStatus;
+  await admin.from("orders").update({ subtotal, total, payment_total: paymentTotal, balance_due: Math.max(total - paymentTotal, 0), status: nextStatus, updated_by: staffId }).eq("id", rootOrderId).eq("branch_id", branchId);
+  if (changedStatus) await admin.from("order_status_history").insert({ branch_id: branchId, order_id: rootOrderId, from_status: rootOrder.status, to_status: nextStatus, changed_by: staffId, reason: forcedStatus ? "Nueva tanda agregada a la mesa" : "Estado consolidado de la cuenta" });
+}
 
 async function prepareOrderItems(admin: ReturnType<typeof createAdminClient>, branchId: string, staffId: string, items: OrderItemInput[]): Promise<PreparedOrderItems> {
   const productIds = [...new Set(items.map((item) => item.productId))];
@@ -138,10 +201,11 @@ export async function createOrder(input: unknown): Promise<OrderActionResult> {
   if (!prepared.ok) return prepared;
   const { itemRows, modifierRows, subtotal } = prepared;
 
-  const { data: order, error: orderError } = await admin.from("orders").insert({ branch_id: context.profile.branchId, order_type: values.orderType, table_id: values.tableId, waiter_id: context.staffId, people_count: values.peopleCount, customer_name: values.customerName || null, notes: values.notes || null, status: "draft", subtotal, total: subtotal, balance_due: subtotal, idempotency_key: values.idempotencyKey, created_by: context.staffId, updated_by: context.staffId }).select("id, order_code").single();
+  const now = new Date().toISOString();
+  const { data: order, error: orderError } = await admin.from("orders").insert({ branch_id: context.profile.branchId, order_type: values.orderType, table_id: values.tableId, waiter_id: context.staffId, people_count: values.peopleCount, customer_name: values.customerName || null, notes: values.notes || null, status: "sent_to_kitchen", subtotal, total: subtotal, balance_due: subtotal, sent_to_kitchen_at: now, idempotency_key: values.idempotencyKey, created_by: context.staffId, updated_by: context.staffId }).select("id, order_code").single();
   if (orderError || !order) return { ok: false, error: orderError?.code === "23505" ? "Este pedido ya fue creado o la mesa se ocupó." : "No se pudo crear el pedido." };
   const orderId = String(order.id);
-  const { error: itemError } = await admin.from("order_items").insert(itemRows.map((row) => ({ ...row, order_id: orderId })));
+  const { error: itemError } = await admin.from("order_items").insert(itemRows.map((row) => ({ ...row, order_id: orderId, sent_to_kitchen_at: now })));
   if (itemError) {
     await admin.from("order_items").delete().eq("order_id", orderId);
     await admin.from("orders").delete().eq("id", orderId);
@@ -156,9 +220,59 @@ export async function createOrder(input: unknown): Promise<OrderActionResult> {
       return { ok: false, error: "No se pudieron guardar los modificadores." };
     }
   }
-  await admin.from("audit_logs").insert({ branch_id: context.profile.branchId, actor_id: context.staffId, action: "order.created", entity: "orders", entity_id: orderId, after_data: { order_code: order.order_code, total: subtotal } });
+  await admin.from("order_status_history").insert({ branch_id: context.profile.branchId, order_id: orderId, from_status: null, to_status: "sent_to_kitchen", changed_by: context.staffId });
+  await admin.from("audit_logs").insert({ branch_id: context.profile.branchId, actor_id: context.staffId, action: "order.created", entity: "orders", entity_id: orderId, after_data: { order_code: order.order_code, total: subtotal, status: "sent_to_kitchen" } });
+  await publishKitchenUpdate(admin, context.profile.branchId, "order_created");
   revalidatePath("/mesas");
   revalidatePath("/pedidos");
+  revalidatePath("/cocina");
+  return { ok: true, orderId, orderCode: String(order.order_code) };
+}
+
+export async function createAdditionalOrder(input: unknown): Promise<OrderActionResult> {
+  const context = await requireRole("admin", "waiter");
+  const parsed = additionalOrderSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Revisa la nueva tanda." };
+  const values = parsed.data;
+  const admin = createAdminClient();
+  const { data: existing } = await admin.from("orders").select("id, order_code").eq("branch_id", context.profile.branchId).eq("idempotency_key", values.idempotencyKey).maybeSingle();
+  if (existing) return { ok: true, orderId: String(existing.id), orderCode: String(existing.order_code) };
+
+  const { data: selectedOrder } = await admin.from("orders").select("id, parent_order_id, branch_id, order_type, table_id, status, waiter_id").eq("id", values.parentOrderId).eq("branch_id", context.profile.branchId).maybeSingle();
+  if (!selectedOrder) return { ok: false, error: "La cuenta de la mesa no fue encontrada." };
+  const rootOrderId = selectedOrder.parent_order_id ? String(selectedOrder.parent_order_id) : String(selectedOrder.id);
+  const { data: rootOrder } = await admin.from("orders").select("id, order_code, order_type, table_id, status, waiter_id, customer_name, people_count").eq("id", rootOrderId).eq("branch_id", context.profile.branchId).maybeSingle();
+  if (!rootOrder || rootOrder.order_type !== "dine_in" || !rootOrder.table_id) return { ok: false, error: "Solo puedes agregar tandas a una mesa activa." };
+  if (["paid", "cancelled"].includes(rootOrder.status)) return { ok: false, error: "La cuenta ya está cerrada y no admite nuevos productos." };
+  if (selectedOrder.waiter_id !== context.staffId && rootOrder.waiter_id !== context.staffId && !context.roles.includes("admin")) return { ok: false, error: "Solo puedes agregar pedidos de tu mesa." };
+
+  const prepared = await prepareOrderItems(admin, context.profile.branchId, context.staffId, values.items);
+  if (!prepared.ok) return prepared;
+  const now = new Date().toISOString();
+  const { itemRows, modifierRows, subtotal } = prepared;
+  const { data: order, error: orderError } = await admin.from("orders").insert({ branch_id: context.profile.branchId, parent_order_id: rootOrderId, order_type: rootOrder.order_type, table_id: rootOrder.table_id, waiter_id: context.staffId, people_count: rootOrder.people_count, customer_name: rootOrder.customer_name, notes: values.notes || null, status: "sent_to_kitchen", subtotal, total: subtotal, balance_due: subtotal, sent_to_kitchen_at: now, idempotency_key: values.idempotencyKey, created_by: context.staffId, updated_by: context.staffId }).select("id, order_code").single();
+  if (orderError || !order) return { ok: false, error: orderError?.code === "23505" ? "Esta tanda ya fue creada." : "No se pudo crear el pedido adicional." };
+  const orderId = String(order.id);
+  const { error: itemError } = await admin.from("order_items").insert(itemRows.map((row) => ({ ...row, order_id: orderId, sent_to_kitchen_at: now })));
+  if (itemError) {
+    await admin.from("order_items").delete().eq("order_id", orderId);
+    await admin.from("orders").delete().eq("id", orderId);
+    return { ok: false, error: "No se pudieron guardar los productos adicionales." };
+  }
+  if (modifierRows.length) {
+    const { error: modifierError } = await admin.from("order_item_modifiers").insert(modifierRows);
+    if (modifierError) {
+      await admin.from("order_item_modifiers").delete().in("order_item_id", itemRows.map((row) => String(row.id)));
+      await admin.from("order_items").delete().eq("order_id", orderId);
+      await admin.from("orders").delete().eq("id", orderId);
+      return { ok: false, error: "No se pudieron guardar los modificadores adicionales." };
+    }
+  }
+  await admin.from("order_status_history").insert({ branch_id: context.profile.branchId, order_id: orderId, from_status: null, to_status: "sent_to_kitchen", changed_by: context.staffId, reason: "Nueva tanda para la misma mesa" });
+  await refreshOrderSessionTotals(admin, context.profile.branchId, rootOrderId, context.staffId, "sent_to_kitchen");
+  await admin.from("audit_logs").insert({ branch_id: context.profile.branchId, actor_id: context.staffId, action: "order.additional_created", entity: "orders", entity_id: orderId, after_data: { order_code: order.order_code, parent_order_id: rootOrderId, root_order_code: rootOrder.order_code, total: subtotal } });
+  await publishKitchenUpdate(admin, context.profile.branchId, "additional_order_created");
+  revalidatePath("/mesas"); revalidatePath("/pedidos"); revalidatePath(`/pedidos/${rootOrderId}`); revalidatePath(`/pedidos/${orderId}`); revalidatePath("/cocina"); revalidatePath("/caja");
   return { ok: true, orderId, orderCode: String(order.order_code) };
 }
 
@@ -170,6 +284,8 @@ export async function updateOrder(input: unknown): Promise<OrderActionResult> {
   const admin = createAdminClient();
   const { data: order } = await admin.from("orders").select("id, order_code, branch_id, status, waiter_id, total, payment_total").eq("id", values.orderId).eq("branch_id", context.profile.branchId).maybeSingle();
   if (!order) return { ok: false, error: "Pedido no encontrado." };
+  const { data: additionalOrders } = await admin.from("orders").select("id").eq("parent_order_id", values.orderId).eq("branch_id", context.profile.branchId).limit(1);
+  if (additionalOrders?.length) return { ok: false, error: "Este pedido tiene tandas adicionales. Usa “Agregar pedido” para añadir productos sin modificar lo anterior." };
   if (order.waiter_id !== context.staffId && !context.roles.includes("admin")) return { ok: false, error: "Solo puedes editar tus propios pedidos." };
   if (["payment_pending", "paid", "cancelled"].includes(order.status)) return { ok: false, error: "El pedido ya está en cobro, pagado o anulado y no puede editarse." };
   if (Number(order.payment_total) > 0) return { ok: false, error: "No se puede editar un pedido que ya tiene pagos registrados." };
@@ -213,6 +329,7 @@ export async function sendOrderToKitchen(orderId: string): Promise<OrderActionRe
   await admin.from("order_items").update({ sent_to_kitchen_at: now, updated_by: context.staffId }).eq("order_id", orderId).eq("status", "pending");
   await admin.from("order_status_history").insert({ branch_id: context.profile.branchId, order_id: orderId, from_status: order.status, to_status: "sent_to_kitchen", changed_by: context.staffId });
   await admin.from("audit_logs").insert({ branch_id: context.profile.branchId, actor_id: context.staffId, action: "order.sent_to_kitchen", entity: "orders", entity_id: orderId, after_data: { status: "sent_to_kitchen" } });
+  await publishKitchenUpdate(admin, context.profile.branchId, "order_sent_to_kitchen");
   revalidatePath("/mesas"); revalidatePath("/pedidos"); revalidatePath("/cocina");
   return { ok: true, orderId, orderCode: String(order.order_code) };
 }
@@ -232,13 +349,16 @@ export async function updateKitchenItem(itemId: string, nextStatus: string): Pro
   const { data: allItems } = await admin.from("order_items").select("status").eq("order_id", item.order_id);
   const itemStatuses = asRows<{ status: string }>(allItems).map((row) => row.status).filter((value) => value !== "cancelled");
   const orderStatus = itemStatuses.every((value) => value === "delivered") ? "delivered" : itemStatuses.every((value) => value === "ready" || value === "delivered") ? "ready" : itemStatuses.some((value) => value === "ready" || value === "delivered") ? "partially_ready" : "preparing";
-  const { data: order } = await admin.from("orders").select("status, order_code").eq("id", item.order_id).maybeSingle();
+  const { data: order } = await admin.from("orders").select("status, order_code, parent_order_id").eq("id", item.order_id).maybeSingle();
   if (order && order.status !== orderStatus) {
     await admin.from("orders").update({ status: orderStatus, delivered_at: orderStatus === "delivered" ? new Date().toISOString() : null, updated_by: context.staffId }).eq("id", item.order_id);
     await admin.from("order_status_history").insert({ branch_id: context.profile.branchId, order_id: item.order_id, from_status: order.status, to_status: orderStatus, changed_by: context.staffId });
   }
+  const rootOrderId = order?.parent_order_id ? String(order.parent_order_id) : String(item.order_id);
+  await refreshOrderSessionTotals(admin, context.profile.branchId, rootOrderId, context.staffId);
   await admin.from("audit_logs").insert({ branch_id: context.profile.branchId, actor_id: context.staffId, action: "kitchen.item_status_changed", entity: "order_items", entity_id: itemId, after_data: { status } });
-  revalidatePath("/cocina"); revalidatePath("/pedidos"); revalidatePath("/mesas");
+  await publishKitchenUpdate(admin, context.profile.branchId, `item_${status}`);
+  revalidatePath("/cocina"); revalidatePath("/pedidos"); revalidatePath("/mesas"); revalidatePath(`/pedidos/${rootOrderId}`); revalidatePath("/caja");
   return { ok: true, orderId: String(item.order_id), orderCode: order ? String(order.order_code) : undefined };
 }
 

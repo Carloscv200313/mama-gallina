@@ -13,11 +13,11 @@ export async function getTablesWithOrders(branchId: string): Promise<PosTable[]>
   const admin = createAdminClient();
   const [{ data: tableData, error: tableError }, { data: orderData, error: orderError }] = await Promise.all([
     admin.from("tables").select("id, table_number, name, capacity, status").eq("branch_id", branchId).eq("is_active", true).order("table_number"),
-    admin.from("orders").select("id, order_code, table_id, status, total, opened_at, waiter_id").eq("branch_id", branchId).in("status", [...ACTIVE_ORDER_STATUSES]).order("opened_at", { ascending: false }),
+    admin.from("orders").select("id, order_code, parent_order_id, table_id, status, total, opened_at, waiter_id").eq("branch_id", branchId).is("parent_order_id", null).in("status", [...ACTIVE_ORDER_STATUSES]).order("opened_at", { ascending: false }),
   ]);
   if (tableError || orderError) throw new Error("No se pudo cargar el mapa de mesas.");
 
-  const orders = rows<{ id: string; order_code: string; table_id: string | null; status: string; total: number; opened_at: string; waiter_id: string }>(orderData);
+  const orders = rows<{ id: string; order_code: string; parent_order_id: string | null; table_id: string | null; status: string; total: number; opened_at: string; waiter_id: string }>(orderData);
   const waiterIds = [...new Set(orders.map((order) => order.waiter_id).filter(Boolean))];
   const { data: staffData } = waiterIds.length ? await admin.from("staff_members").select("id, full_name").in("id", waiterIds) : { data: [] };
   const staff = new Map(rows<{ id: string; full_name: string }>(staffData).map((person) => [person.id, person.full_name]));

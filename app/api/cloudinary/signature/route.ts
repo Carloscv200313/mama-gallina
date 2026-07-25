@@ -10,7 +10,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No autenticado." }, { status: 401 });
   }
 
-  if (!context.roles.includes("admin") && !context.roles.includes("cashier")) {
+  if (!context.roles.includes("admin") && !context.roles.includes("cashier") && !context.roles.includes("waiter")) {
     return NextResponse.json({ error: "No autorizado para cargar evidencias." }, { status: 403 });
   }
 
@@ -35,4 +35,3 @@ export async function POST(request: Request) {
     signature: createCloudinaryUploadSignature({ folder, timestamp }),
   });
 }
-

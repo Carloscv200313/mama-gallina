@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireRole } from "@/lib/auth/server";
 import { getTablesWithOrders } from "@/lib/pos/data";
 import { formatCurrency, orderStatusClass, orderStatusLabel } from "@/lib/pos/types";
+import { QuickChargeModal } from "@/components/cash/quick-charge-modal";
 
 export default async function TablesPage() {
   const context = await requireRole("admin", "waiter");
@@ -27,8 +28,7 @@ function TableCard({ table }: { table: Awaited<ReturnType<typeof getTablesWithOr
   return <Card className={active ? "border-brand-olive/30" : ""}>
     <CardHeader className="flex-row items-start justify-between"><div><CardTitle>Mesa {table.tableNumber}</CardTitle><p className="mt-1 text-sm text-brand-olive">{table.name ?? "Mesa de salón"} · {table.capacity} personas</p></div><span className={`size-3 rounded-full ${table.status === "out_of_service" ? "bg-red-500" : active ? "bg-amber-500" : "bg-emerald-500"}`} /></CardHeader>
     <CardContent className="space-y-4">
-      {table.status === "out_of_service" ? <Badge variant="danger">Fuera de servicio</Badge> : table.order ? <><div className="flex items-center justify-between"><Badge className={orderStatusClass(table.order.status)}>{orderStatusLabel(table.order.status)}</Badge><span className="font-semibold">{formatCurrency(table.order.total)}</span></div><div className="flex items-center gap-2 text-xs text-brand-olive"><Users className="size-3.5" /> {table.order.waiterName} · {table.order.orderCode}</div><Button asChild variant="outline" className="w-full"><Link href={`/pedidos/${table.order.id}`}>Ver pedido <ArrowRight className="size-4" /></Link></Button></> : <Button asChild className="w-full"><Link href={`/pedidos/nuevo?tableId=${table.id}`}><Plus className="size-4" /> Abrir pedido</Link></Button>}
+      {table.status === "out_of_service" ? <Badge variant="danger">Fuera de servicio</Badge> : table.order ? <><div className="flex items-center justify-between"><Badge className={orderStatusClass(table.order.status)}>{orderStatusLabel(table.order.status)}</Badge><span className="font-semibold">{formatCurrency(table.order.total)}</span></div><div className="flex items-center gap-2 text-xs text-brand-olive"><Users className="size-3.5" /> {table.order.waiterName} · {table.order.orderCode}</div><div className="grid gap-2 sm:grid-cols-2"><Button asChild variant="outline" className="w-full"><Link href={`/pedidos/${table.order.id}`}>Ver pedido <ArrowRight className="size-4" /></Link></Button><Button asChild className="w-full"><Link href={`/pedidos/nuevo?tableId=${table.id}&parentOrderId=${table.order.id}`}><Plus className="size-4" /> Agregar pedido</Link></Button>{["ready", "delivered", "payment_pending"].includes(table.order.status) ? <QuickChargeModal orderId={table.order.id} orderCode={table.order.orderCode} total={table.order.total} /> : null}</div></> : <Button asChild className="w-full"><Link href={`/pedidos/nuevo?tableId=${table.id}`}><Plus className="size-4" /> Abrir pedido</Link></Button>}
     </CardContent>
   </Card>;
 }
-
