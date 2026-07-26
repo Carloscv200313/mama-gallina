@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { signOut } from "@/app/actions/auth";
-import { ROLE_LABELS, type RoleKey } from "@/lib/auth/roles";
+import type { RoleKey } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/server";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -60,7 +60,7 @@ export function AppShell({ context, children }: AppShellProps) {
   return (
     <div className="min-h-screen bg-brand-cream text-brand-forest">
       <aside className={cn(
-        "fixed inset-y-0 left-0 z-40 flex w-72 -translate-x-full flex-col border-r border-brand-olive/10 bg-white px-5 py-6 transition-[width,transform,padding] duration-200 lg:translate-x-0",
+        "fixed inset-y-0 left-0 z-40 flex w-72 -translate-x-full flex-col overflow-y-auto border-r border-brand-olive/10 bg-white px-5 py-6 transition-[width,transform,padding] duration-200 lg:translate-x-0",
         sidebarCollapsed && "lg:w-20 lg:px-3",
         mobileOpen && "translate-x-0",
       )}>
@@ -111,39 +111,27 @@ export function AppShell({ context, children }: AppShellProps) {
         <div className={cn("mt-auto rounded-2xl bg-brand-cream p-4", sidebarCollapsed && "lg:p-2 lg:text-center")} title={sidebarCollapsed ? "Local activo: Mamá Gallina" : undefined}>
           {sidebarCollapsed ? <span className="hidden text-lg lg:block">✦</span> : null}
           <div className={cn(sidebarCollapsed && "lg:hidden")}>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-olive">Local activo</p>
-          <p className="mt-2 font-display font-semibold">Mamá Gallina</p>
-          <p className="mt-1 text-xs text-brand-olive">Operación central</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-olive">Local activo</p>
+            <p className="mt-2 font-display font-semibold">Mamá Gallina</p>
+            <p className="mt-1 text-xs text-brand-olive">Operación central</p>
           </div>
         </div>
+
+        <form action={signOut} className="mt-4">
+          <Button variant="outline" type="submit" className={cn("w-full justify-start gap-3", sidebarCollapsed && "lg:size-11 lg:justify-center lg:px-0")} aria-label="Cerrar sesión" title={sidebarCollapsed ? "Cerrar sesión" : undefined}>
+            <LogOut className="size-4" />
+            <span className={cn(sidebarCollapsed && "lg:hidden")}>Cerrar sesión</span>
+          </Button>
+        </form>
       </aside>
 
       {mobileOpen ? <button className="fixed inset-0 z-30 bg-brand-forest/35 lg:hidden" aria-label="Cerrar menú" onClick={() => setMobileOpen(false)} /> : null}
 
       <div className={cn("transition-[padding] duration-200 lg:pl-72", sidebarCollapsed && "lg:pl-20")}>
-        <header className="sticky top-0 z-20 flex min-h-18 items-center justify-between border-b border-brand-olive/10 bg-brand-cream/90 px-4 backdrop-blur md:px-8">
-          <div className="flex items-center gap-3">
-            <button className="rounded-xl border border-brand-olive/15 bg-white p-2.5 lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Abrir menú">
-              <Menu className="size-5" />
-            </button>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-olive">Sistema de operación</p>
-              <p className="font-display text-lg font-semibold">Hola, {context.profile.fullName.split(" ")[0]}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="hidden text-right sm:block">
-              <p className="text-sm font-semibold">{ROLE_LABELS[context.roles[0]] ?? "Usuario"}</p>
-              <p className="text-xs text-brand-olive">Sesión interna protegida</p>
-            </div>
-            <form action={signOut}>
-              <Button variant="outline" size="icon" type="submit" aria-label="Cerrar sesión">
-                <LogOut className="size-4" />
-              </Button>
-            </form>
-          </div>
-        </header>
-        <main className="min-h-[calc(100vh-4.5rem)] px-4 py-6 md:px-8 md:py-8">{children}</main>
+        <button className="fixed left-4 top-4 z-20 rounded-xl border border-brand-olive/15 bg-white p-2.5 shadow-sm lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Abrir menú">
+          <Menu className="size-5" />
+        </button>
+        <main className="min-h-screen px-4 pb-24 pt-20 md:px-8 md:py-8 lg:pt-8">{children}</main>
       </div>
 
       <nav className="fixed inset-x-3 bottom-3 z-20 grid grid-cols-5 rounded-2xl border border-brand-olive/10 bg-white/95 p-2 shadow-xl backdrop-blur lg:hidden" aria-label="Navegación móvil">
