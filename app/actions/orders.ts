@@ -84,10 +84,10 @@ async function refreshOrderSessionTotals(admin: ReturnType<typeof createAdminCli
   const activeStatuses = new Set(["draft", "confirmed", "sent_to_kitchen", "preparing", "partially_ready", "ready", "delivered"]);
   const shouldRecalculateStatus = !["payment_pending", "paid", "cancelled"].includes(rootOrder.status);
   let nextStatus = forcedStatus ?? rootOrder.status;
-  if (!forcedStatus && shouldRecalculateStatus) {
-    const statuses = ((itemData ?? []) as Array<{ line_total: number; status: string }>)
-      .map((item) => item.status)
-      .filter((status) => status !== "cancelled");
+    if (!forcedStatus && shouldRecalculateStatus) {
+      const statuses = ((itemData ?? []) as Array<{ line_total: number; status: string }>)
+        .map((item) => item.status)
+        .filter((status) => status !== "cancelled");
     if (statuses.length > 0) {
       nextStatus = statuses.every((status) => status === "delivered")
         ? "delivered"
@@ -95,10 +95,10 @@ async function refreshOrderSessionTotals(admin: ReturnType<typeof createAdminCli
           ? "ready"
           : statuses.some((status) => status === "ready" || status === "delivered")
             ? "partially_ready"
-            : statuses.some((status) => status === "preparing")
-              ? "preparing"
-              : "sent_to_kitchen";
-    }
+              : statuses.some((status) => status === "preparing")
+                ? "preparing"
+                : "sent_to_kitchen";
+    } else nextStatus = "cancelled";
   }
   if (!activeStatuses.has(nextStatus) && !["payment_pending", "paid", "cancelled"].includes(nextStatus)) nextStatus = "sent_to_kitchen";
   const changedStatus = rootOrder.status !== nextStatus;
@@ -176,7 +176,7 @@ async function prepareOrderItems(admin: ReturnType<typeof createAdminClient>, br
   return { ok: true, itemRows, modifierRows, subtotal };
 }
 
-export type OrderActionResult = { ok: true; orderId: string; orderCode?: string } | { ok: false; error: string };
+export type OrderActionResult = { ok: true; orderId: string; orderCode?: string; message?: string } | { ok: false; error: string };
 
 export async function createOrder(input: unknown): Promise<OrderActionResult> {
   const context = await requireRole("admin", "waiter");
@@ -312,6 +312,34 @@ export async function updateOrder(input: unknown): Promise<OrderActionResult> {
   await admin.from("audit_logs").insert({ branch_id: context.profile.branchId, actor_id: context.staffId, action: "order.edited", entity: "orders", entity_id: values.orderId, before_data: { status: order.status, total: order.total }, after_data: { status: nextStatus, total: prepared.subtotal, item_count: values.items.length }, reason: replacementReason });
   revalidatePath("/mesas"); revalidatePath("/pedidos"); revalidatePath(`/pedidos/${values.orderId}`); revalidatePath(`/pedidos/${values.orderId}/editar`); revalidatePath("/cocina");
   return { ok: true, orderId: values.orderId, orderCode: String(order.order_code) };
+}
+
+export async function cancelOrderItem(itemId: string): Promise<OrderActionResult> {
+  const context = await requireRole("admin", "waiter");
+  if (!z.uuid().safeParse(itemId).success) return { ok: false, error: "Producto inválido." };
+  const admin = createAdminClient();
+  const { data: item } = await admin.from("order_items").select("id, order_id, product_name_snapshot, quantity, status").eq("id", itemId).eq("branch_id", context.profile.branchId).maybeSingle();
+  if (!item) return { ok: false, error: "Producto no encontrado." };
+  if (item.status === "cancelled") return { ok: false, error: "Este producto ya fue quitado del pedido." };
+  const { data: order } = await admin.from("orders").select("id, order_code, parent_order_id, status, waiter_id, table_id, order_type").eq("id", item.order_id).eq("branch_id", context.profile.branchId).maybeSingle();
+  if (!order) return { ok: false, error: "Pedido no encontrado." };
+  if (order.waiter_id !== context.staffId && !context.roles.includes("admin")) return { ok: false, error: "Solo puedes quitar productos de tus propios pedidos." };
+  if (["payment_pending", "paid", "cancelled"].includes(order.status)) return { ok: false, error: "El pedido ya no permite quitar productos." };
+  const now = new Date().toISOString();
+  const cancellationReason = item.status === "pending" ? "Producto quitado antes de preparar" : "Producto quitado manualmente del pedido";
+  const { data: cancelledItem, error: cancelError } = await admin.from("order_items").update({ status: "cancelled", cancelled_at: now, cancellation_reason: cancellationReason, updated_by: context.staffId }).eq("id", item.id).neq("status", "cancelled").select("id").maybeSingle();
+  if (cancelError || !cancelledItem) return { ok: false, error: "El producto ya avanzó o no pudo quitarse." };
+  const { data: remainingItems } = await admin.from("order_items").select("id").eq("order_id", item.order_id).neq("status", "cancelled").limit(1);
+  if (!remainingItems?.length) await admin.from("orders").update({ status: "cancelled", updated_by: context.staffId }).eq("id", item.order_id).eq("branch_id", context.profile.branchId);
+  const rootOrderId = order.parent_order_id ? String(order.parent_order_id) : String(order.id);
+  await refreshOrderSessionTotals(admin, context.profile.branchId, rootOrderId, context.staffId);
+  const { data: table } = order.table_id ? await admin.from("tables").select("table_number").eq("id", order.table_id).eq("branch_id", context.profile.branchId).maybeSingle() : { data: null };
+  const location = order.order_type === "takeaway" ? "el pedido para llevar" : `la Mesa ${table?.table_number ?? ""}`;
+  const message = `Se quitó ${item.quantity} × ${item.product_name_snapshot} de ${location}.`;
+  await admin.from("audit_logs").insert({ branch_id: context.profile.branchId, actor_id: context.staffId, action: "order.item_cancelled", entity: "order_items", entity_id: item.id, before_data: { status: item.status, order_code: order.order_code }, after_data: { status: "cancelled", order_code: order.order_code }, reason: message });
+  await publishKitchenUpdate(admin, context.profile.branchId, "item_cancelled");
+  revalidatePath("/cocina"); revalidatePath("/mesas"); revalidatePath("/pedidos"); revalidatePath(`/pedidos/${rootOrderId}`); revalidatePath("/caja");
+  return { ok: true, orderId: String(order.id), orderCode: String(order.order_code), message };
 }
 
 export async function sendOrderToKitchen(orderId: string): Promise<OrderActionResult> {

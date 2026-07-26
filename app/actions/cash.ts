@@ -142,7 +142,6 @@ export async function completeOrderPayment(input: unknown): Promise<CashActionRe
   const values = parsed.data;
   const isCash = values.method === "cash";
   if (isCash && values.receivedAmount < values.amount) return { ok: false, error: "El efectivo recibido no puede ser menor al total." };
-  if (!isCash && !values.evidence) return { ok: false, error: "Toma una foto del comprobante antes de cobrar." };
   const admin = createAdminClient();
   const { data: existing } = await admin.from("payments").select("id, order_id").eq("branch_id", context.profile.branchId).eq("idempotency_key", values.idempotencyKey).maybeSingle();
   if (existing) return { ok: true, id: String(existing.order_id) };
@@ -162,7 +161,7 @@ export async function completeOrderPayment(input: unknown): Promise<CashActionRe
     cashSessionId = String(sessions[0].id);
   }
   const now = new Date().toISOString();
-  const { data: payment, error: paymentError } = await admin.from("payments").insert({ branch_id: context.profile.branchId, order_id: rootOrderId, cash_session_id: cashSessionId, method: values.method, amount: values.amount, received_amount: isCash ? values.receivedAmount : null, change_amount: isCash ? Math.max(0, values.receivedAmount - values.amount) : 0, operation_number: null, idempotency_key: values.idempotencyKey, status: isCash ? "verified" : "pending_evidence", notes: null, registered_by: context.staffId, verified_by: isCash ? context.staffId : null, verified_at: isCash ? now : null }).select("id").single();
+  const { data: payment, error: paymentError } = await admin.from("payments").insert({ branch_id: context.profile.branchId, order_id: rootOrderId, cash_session_id: cashSessionId, method: values.method, amount: values.amount, received_amount: isCash ? values.receivedAmount : null, change_amount: isCash ? Math.max(0, values.receivedAmount - values.amount) : 0, operation_number: null, idempotency_key: values.idempotencyKey, status: "verified", notes: null, registered_by: context.staffId, verified_by: context.staffId, verified_at: now }).select("id").single();
   if (paymentError || !payment) return { ok: false, error: paymentError?.code === "23505" ? "Este cobro ya fue registrado." : "No se pudo registrar el cobro." };
   const paymentId = String(payment.id);
   if (!isCash && values.evidence) {

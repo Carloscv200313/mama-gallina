@@ -1,10 +1,10 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Banknote, CheckCircle2, ImagePlus, LockKeyhole, Upload, X } from "lucide-react";
-import { attachPaymentEvidence, closeCashSession, closeSale, openCashSession, registerPayment, verifyPayment } from "@/app/actions/cash";
+import { Banknote, CheckCircle2, LockKeyhole } from "lucide-react";
+import { closeCashSession, closeSale, openCashSession, registerPayment, verifyPayment } from "@/app/actions/cash";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -31,46 +31,13 @@ function PaymentForm({ order, pending, onDone }: { order: CashOrder; pending: bo
   const [method, setMethod] = useState<"cash" | "plin" | "bank_transfer">("cash");
   const [amount, setAmount] = useState(order.balanceDue.toFixed(2));
   const [received, setReceived] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [uploading, setUploading] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
   const isDigital = method !== "cash";
-
-  useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
-
-  function clearFile() {
-    setFile(null);
-    setPreviewUrl(null);
-    if (inputRef.current) inputRef.current.value = "";
-  }
-
-  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
-    const nextFile = event.target.files?.[0] ?? null;
-    if (!nextFile) return;
-    if (!["image/jpeg", "image/png", "image/webp"].includes(nextFile.type)) {
-      clearFile();
-      setMessage("Selecciona una imagen JPG, PNG o WebP.");
-      return;
-    }
-    if (nextFile.size > 10_000_000) {
-      clearFile();
-      setMessage("La imagen no puede superar los 10 MB.");
-      return;
-    }
-    setFile(nextFile);
-    setPreviewUrl(URL.createObjectURL(nextFile));
-    setMessage("");
-  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setMessage("");
-    if (isDigital && !file) {
-      setMessage("Selecciona la evidencia para ver la previsualización antes de registrar el pago.");
-      return;
-    }
     setUploading(true);
     const payment = await registerPayment({ orderId: order.id, method, amount: Number(amount), receivedAmount: method === "cash" ? Number(received || amount) : null, notes: "", idempotencyKey: crypto.randomUUID() });
     if (payment.ok === false || !payment.id) {
@@ -78,40 +45,12 @@ function PaymentForm({ order, pending, onDone }: { order: CashOrder; pending: bo
       setUploading(false);
       return;
     }
-    if (isDigital && file) {
-      try {
-        const signResponse = await fetch("/api/cloudinary/signature", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderCode: order.orderCode }) });
-        const signature = await signResponse.json();
-        if (!signResponse.ok) throw new Error(signature.error ?? "No se pudo firmar la carga.");
-        const body = new FormData();
-        body.append("file", file);
-        body.append("api_key", signature.apiKey);
-        body.append("timestamp", String(signature.timestamp));
-        body.append("signature", signature.signature);
-        body.append("folder", signature.folder);
-        const uploadResponse = await fetch(`https://api.cloudinary.com/v1_1/${signature.cloudName}/image/upload`, { method: "POST", body });
-        const upload = await uploadResponse.json();
-        if (!uploadResponse.ok) throw new Error(upload.error?.message ?? "Cloudinary rechazó la imagen.");
-        const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
-        const sha256 = Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-        const dimensions = await getImageDimensions(file);
-        const evidence = await attachPaymentEvidence({ paymentId: payment.id, secureUrl: upload.secure_url, publicId: upload.public_id, fileSha256: sha256, width: dimensions.width, height: dimensions.height, format: upload.format ?? file.type.split("/")[1] ?? "jpg", bytes: file.size });
-        if (!evidence.ok) throw new Error(evidence.error ?? "No se pudo guardar la evidencia.");
-      } catch (caught) {
-        setMessage(caught instanceof Error ? caught.message : "No se pudo subir la evidencia.");
-        setUploading(false);
-        return;
-      }
-    }
     setMessage("Pago registrado correctamente.");
     setUploading(false);
-    clearFile();
     onDone();
   }
 
-  return <form className="mt-3 grid gap-2 sm:grid-cols-[150px_110px_1fr_auto]" onSubmit={submit}><select className="min-h-10 rounded-xl border border-brand-olive/20 px-2 text-sm" value={method} onChange={(event) => setMethod(event.target.value as typeof method)}><option value="cash">Efectivo</option><option value="plin">Plin</option><option value="bank_transfer">Transferencia</option></select><Input type="number" min="0.01" max={order.balanceDue} step="0.01" required value={amount} onChange={(event) => setAmount(event.target.value)} />{isDigital ? <label className="flex min-h-10 cursor-pointer items-center justify-center rounded-xl border border-dashed border-brand-olive/30 px-2 text-xs"><ImagePlus className="mr-1 size-4" />{file ? "Cambiar foto" : "Evidencia"}<input ref={inputRef} className="hidden" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={handleFileChange} /></label> : <Input type="number" min="0" step="0.01" required placeholder="Recibido" value={received} onChange={(event) => setReceived(event.target.value)} />}{!isDigital ? <Button size="sm" disabled={pending || uploading}><Banknote className="size-4" /> Registrar</Button> : null}{isDigital ? <Button size="sm" disabled={pending || uploading} className="sm:col-span-4"><Upload className="size-4" /> {uploading ? "Subiendo..." : "Registrar y subir evidencia"}</Button> : null}{isDigital && previewUrl ? <div className="relative overflow-hidden rounded-xl border border-brand-olive/15 bg-brand-cream p-2 sm:col-span-4"><img src={previewUrl} alt="Previsualización de la evidencia" className="max-h-56 w-full rounded-lg object-contain" /><div className="mt-2 flex items-center justify-between gap-2 text-xs text-brand-olive"><span className="truncate">{file?.name}</span><button type="button" onClick={clearFile} className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 font-semibold text-red-700 hover:bg-red-50"><X className="size-3.5" /> Quitar</button></div></div> : null}{message ? <p className={`text-xs sm:col-span-4 ${message.includes("correctamente") ? "text-emerald-700" : "text-red-700"}`}>{message}</p> : null}</form>;
+  return <form className="mt-3 grid gap-2 sm:grid-cols-[150px_110px_1fr_auto]" onSubmit={submit}><select className="min-h-10 rounded-xl border border-brand-olive/20 px-2 text-sm" value={method} onChange={(event) => setMethod(event.target.value as typeof method)}><option value="cash">Efectivo</option><option value="plin">Plin</option><option value="bank_transfer">Transferencia</option></select><Input type="number" min="0.01" max={order.balanceDue} step="0.01" required value={amount} onChange={(event) => setAmount(event.target.value)} />{isDigital ? <p className="flex min-h-10 items-center rounded-xl bg-brand-cream px-3 text-xs text-brand-olive sm:col-span-1">Sin foto</p> : <Input type="number" min="0" step="0.01" required placeholder="Recibido" value={received} onChange={(event) => setReceived(event.target.value)} />}{!isDigital ? <Button size="sm" disabled={pending || uploading}><Banknote className="size-4" /> Registrar</Button> : <Button size="sm" disabled={pending || uploading}>{uploading ? "Registrando..." : "Registrar"}</Button>}{message ? <p className={`text-xs sm:col-span-4 ${message.includes("correctamente") ? "text-emerald-700" : "text-red-700"}`}>{message}</p> : null}</form>;
 }
 
 function PaymentReview({ payment, pending, onAction }: { payment: PendingPayment; pending: boolean; onAction: (approved: boolean, reason: string) => void }) { const [reason, setReason] = useState(""); return <div className="rounded-xl border border-brand-olive/10 p-3"><div className="flex items-start justify-between gap-2"><div><p className="font-semibold">{payment.orderCode} · {formatCurrency(payment.amount)}</p><p className="text-xs text-brand-olive">{payment.method === "plin" ? "Plin" : "Transferencia"}</p></div><Badge variant={payment.status === "rejected" ? "danger" : "warning"}>{payment.status === "pending_verification" ? "Por verificar" : payment.status === "rejected" ? "Rechazado" : "Pendiente"}</Badge></div>{payment.secureUrl ? <img src={payment.secureUrl} alt="Evidencia del pago" className="mt-3 max-h-48 w-full rounded-xl object-contain" /> : <p className="mt-3 text-xs text-red-700">Sin evidencia cargada.</p>}<div className="mt-3 flex gap-2"><Button size="sm" disabled={pending || payment.status !== "pending_verification"} onClick={() => onAction(true, "")}>Aprobar</Button><Input className="min-h-9" placeholder="Motivo de rechazo" value={reason} onChange={(event) => setReason(event.target.value)} /><Button size="sm" variant="danger" disabled={pending} onClick={() => onAction(false, reason)}>Rechazar</Button></div></div>; }
-
-async function getImageDimensions(file: File) { const url = URL.createObjectURL(file); try { return await new Promise<{ width: number; height: number }>((resolve, reject) => { const image = new Image(); image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight }); image.onerror = () => reject(new Error("No se pudo leer la imagen.")); image.src = url; }); } finally { URL.revokeObjectURL(url); } }
