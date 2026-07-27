@@ -3,6 +3,7 @@ import { Activity, Banknote, ChefHat, CircleDollarSign, Clock3, LayoutGrid, Rece
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireAuth } from "@/lib/auth/server";
+import { getLimaDayRange } from "@/lib/pos/date";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 type Metric = { label: string; value: string; detail: string; icon: typeof TrendingUp; tone: string };
@@ -48,10 +49,9 @@ async function getDashboardMetrics(branchId: string | null): Promise<Metric[]> {
   ];
   if (!branchId) return empty;
   const supabase = createAdminClient();
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const { start: limaDayStart, end: limaDayEnd } = getLimaDayRange();
   const [{ data: paidOrders }, { count: activeOrders }, { count: occupiedTables }, { data: openCash }] = await Promise.all([
-    supabase.from("orders").select("total").eq("branch_id", branchId).eq("status", "paid").gte("paid_at", today.toISOString()),
+    supabase.from("orders").select("total").eq("branch_id", branchId).eq("status", "paid").is("parent_order_id", null).gte("paid_at", limaDayStart.toISOString()).lt("paid_at", limaDayEnd.toISOString()),
     supabase.from("orders").select("id", { count: "exact", head: true }).eq("branch_id", branchId).in("status", ["confirmed", "sent_to_kitchen", "preparing", "partially_ready", "ready", "delivered", "payment_pending"]),
     supabase.from("orders").select("table_id", { count: "exact", head: true }).eq("branch_id", branchId).in("status", ["draft", "confirmed", "sent_to_kitchen", "preparing", "partially_ready", "ready", "delivered", "payment_pending"]),
     supabase.from("cash_sessions").select("id").eq("branch_id", branchId).eq("status", "open").limit(1),

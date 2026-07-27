@@ -14,7 +14,7 @@ export type ProductSaleDetail = {
   orderCode: string;
 };
 
-export function ProductSalesDetails({ productName, totalQuantity, details }: { productName: string; totalQuantity: number; details: ProductSaleDetail[] }) {
+export function ProductSalesDetails({ productName, totalQuantity, details, summaryLabel = "unidades vendidas hoy" }: { productName: string; totalQuantity: number; details: ProductSaleDetail[]; summaryLabel?: string }) {
   const [open, setOpen] = useState(false);
 
   return <>
@@ -27,7 +27,7 @@ export function ProductSalesDetails({ productName, totalQuantity, details }: { p
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.14em] text-brand-olive">Detalle de ventas</p>
             <h2 className="mt-1 font-display text-2xl font-bold">{productName}</h2>
-            <p className="mt-1 text-sm text-brand-olive">{totalQuantity} unidades vendidas hoy</p>
+            <p className="mt-1 text-sm text-brand-olive">{totalQuantity} {summaryLabel}</p>
           </div>
           <button type="button" onClick={() => setOpen(false)} className="rounded-lg p-1 text-brand-olive hover:bg-brand-cream" aria-label="Cerrar detalle"><X className="size-5" /></button>
         </div>

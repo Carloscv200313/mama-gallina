@@ -9,7 +9,35 @@ const money = z.coerce.number().finite().min(0).max(999999.99);
 const uuid = z.uuid();
 
 export type CashActionResult = { ok: true; id?: string } | { ok: false; error: string };
+export type CashSessionSalesResult =
+  | { ok: true; total: number; products: Array<{ name: string; quantity: number; amount: number }> }
+  | { ok: false; error: string };
 const evidenceInputSchema = z.object({ secureUrl: z.string().url().max(1000), publicId: z.string().min(1).max(300), fileSha256: z.string().regex(/^[a-f0-9]{64}$/), width: z.number().int().positive(), height: z.number().int().positive(), format: z.string().min(1).max(20), bytes: z.number().int().positive().max(10000000) });
+
+export async function getCashSessionSales(sessionId: string): Promise<CashSessionSalesResult> {
+  const context = await requireRole("admin", "cashier");
+  if (!uuid.safeParse(sessionId).success) return { ok: false, error: "Sesión de caja inválida." };
+  const admin = createAdminClient();
+  const { data: session } = await admin.from("cash_sessions").select("id, branch_id, opened_at, closed_at").eq("id", sessionId).eq("branch_id", context.profile.branchId).maybeSingle();
+  if (!session) return { ok: false, error: "No se encontró la sesión de caja." };
+  const end = session.closed_at ?? new Date().toISOString();
+  const { data: rootOrders, error: orderError } = await admin.from("orders").select("id, total, paid_at").eq("branch_id", context.profile.branchId).is("parent_order_id", null).eq("status", "paid").gte("paid_at", session.opened_at).lte("paid_at", end);
+  if (orderError) return { ok: false, error: "No se pudieron cargar las ventas de la sesión." };
+  const roots = (rootOrders ?? []) as Array<{ id: string; total: number; paid_at: string | null }>;
+  if (!roots.length) return { ok: true, total: 0, products: [] };
+  const rootIds = roots.map((order) => order.id);
+  const { data: childOrders, error: childError } = await admin.from("orders").select("id").eq("branch_id", context.profile.branchId).in("parent_order_id", rootIds);
+  if (childError) return { ok: false, error: "No se pudieron cargar las tandas de la sesión." };
+  const orderIds = [...rootIds, ...((childOrders ?? []) as Array<{ id: string }>).map((order) => order.id)];
+  const { data: itemData, error: itemError } = await admin.from("order_items").select("product_name_snapshot, quantity, line_total").eq("branch_id", context.profile.branchId).in("order_id", orderIds).neq("status", "cancelled");
+  if (itemError) return { ok: false, error: "No se pudieron cargar los productos vendidos." };
+  const productMap = new Map<string, { quantity: number; amount: number }>();
+  for (const item of (itemData ?? []) as Array<{ product_name_snapshot: string; quantity: number; line_total: number }>) {
+    const current = productMap.get(item.product_name_snapshot) ?? { quantity: 0, amount: 0 };
+    productMap.set(item.product_name_snapshot, { quantity: current.quantity + Number(item.quantity), amount: current.amount + Number(item.line_total) });
+  }
+  return { ok: true, total: roots.reduce((sum, order) => sum + Number(order.total), 0), products: [...productMap.entries()].map(([name, values]) => ({ name, quantity: values.quantity, amount: values.amount })).sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name)) };
+}
 
 export async function openCashSession(input: { openingAmount: number; openingNote: string }): Promise<CashActionResult> {
   const context = await requireRole("admin", "cashier");
