@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { formatLimaDateTime } from "@/lib/pos/date";
 import { formatCurrency } from "@/lib/pos/types";
 
 type Session = { id: string; opening_amount: number; expected_amount: number | null; status: string; opened_at: string } | null;
@@ -34,17 +35,7 @@ function CashSessionHistory({ rows }: { rows: CashSessionHistory[] }) {
 }
 
 function formatCashDate(value: string) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Lima",
-    day: "2-digit",
-    month: "2-digit",
-    year: "2-digit",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  }).formatToParts(new Date(value));
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.day}/${values.month}/${values.year}, ${values.hour}:${values.minute} ${values.dayPeriod === "AM" ? "a. m." : "p. m."}`;
+  return formatLimaDateTime(value);
 }
 function formatSignedCurrency(value: number) { return `${value >= 0 ? "+" : "-"} ${formatCurrency(Math.abs(value))}`; }
 

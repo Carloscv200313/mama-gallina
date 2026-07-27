@@ -3,6 +3,7 @@
 import { CalendarClock, Eye, MapPin, X } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { formatLimaDateTime } from "@/lib/pos/date";
 
 export type ProductSaleDetail = {
   quantity: number;
@@ -51,5 +52,5 @@ export function ProductSalesDetails({ productName, totalQuantity, details, summa
 
 function formatSaleDate(value: string | null) {
   if (!value) return "Fecha no disponible";
-  return new Date(value).toLocaleString("es-PE", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Lima" });
+  return formatLimaDateTime(value);
 }
