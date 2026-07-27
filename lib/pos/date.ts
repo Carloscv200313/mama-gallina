@@ -1,5 +1,24 @@
 const LIMA_TIME_ZONE = "America/Lima";
 
+function getLimaDateTimeParts(value: string | Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: LIMA_TIME_ZONE,
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).formatToParts(new Date(value));
+
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+
+export function formatLimaDateTime(value: string | Date) {
+  const parts = getLimaDateTimeParts(value);
+  return `${parts.day}/${parts.month}/${parts.year}, ${parts.hour}:${parts.minute} ${parts.dayPeriod === "AM" ? "a. m." : "p. m."}`;
+}
+
 export function getLimaDayRange() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: LIMA_TIME_ZONE,
