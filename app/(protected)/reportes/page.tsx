@@ -3,13 +3,15 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireRole } from "@/lib/auth/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getLimaDayRange } from "@/lib/pos/date";
 import { formatCurrency } from "@/lib/pos/types";
 import { ProductSalesDetails, type ProductSaleDetail } from "@/components/reports/product-sales-details";
 
 export default async function ReportsPage() {
   const context = await requireRole("admin");
-  const admin = createAdminClient(); const today = new Date(); today.setHours(0, 0, 0, 0);
-  const [{ data: orders }, { data: expenses }, { data: items }] = await Promise.all([admin.from("orders").select("id, order_code, total, discount_total, paid_at, table_id, order_type").eq("branch_id", context.profile.branchId).eq("status", "paid").gte("paid_at", today.toISOString()), admin.from("expenses").select("amount").eq("branch_id", context.profile.branchId).eq("status", "active").eq("expense_date", today.toISOString().slice(0, 10)), admin.from("order_items").select("id, product_name_snapshot, variant_name_snapshot, quantity, estimated_cost_snapshot, line_total, order_id, notes, status").eq("branch_id", context.profile.branchId).neq("status", "cancelled").order("created_at", { ascending: false }).limit(1000)]);
+  const admin = createAdminClient();
+  const { date: limaDate, start: limaDayStart, end: limaDayEnd } = getLimaDayRange();
+  const [{ data: orders }, { data: expenses }, { data: items }] = await Promise.all([admin.from("orders").select("id, order_code, total, discount_total, paid_at, table_id, order_type").eq("branch_id", context.profile.branchId).eq("status", "paid").gte("paid_at", limaDayStart.toISOString()).lt("paid_at", limaDayEnd.toISOString()), admin.from("expenses").select("amount").eq("branch_id", context.profile.branchId).eq("status", "active").eq("expense_date", limaDate), admin.from("order_items").select("id, product_name_snapshot, variant_name_snapshot, quantity, estimated_cost_snapshot, line_total, order_id, notes, status").eq("branch_id", context.profile.branchId).neq("status", "cancelled").order("created_at", { ascending: false }).limit(1000)]);
   const paidOrders = (orders ?? []) as Array<{ id: string; order_code: string; total: number; discount_total: number; paid_at: string | null; table_id: string | null; order_type: string }>;
   const expenseRows = (expenses ?? []) as Array<{ amount: number }>;
   const itemRows = (items ?? []) as Array<{ id: string; product_name_snapshot: string; variant_name_snapshot: string | null; quantity: number; estimated_cost_snapshot: number; line_total: number; order_id: string; notes: string | null; status: string }>;
